@@ -356,6 +356,8 @@
   }
   window.authToken = getAuthToken();
   window.USER_ID = getStoredUid();
+  window.setAuthToken = setAuthToken;
+  window.setStoredUid = setStoredUid;
   function authHeaders() {
     return window.authToken ? { "Authorization": "Bearer " + window.authToken } : {};
   }
@@ -752,9 +754,9 @@
       });
     }).then(function (data) {
       window.authToken = data.token;
-      setAuthToken(window.authToken);
+      window.setAuthToken(window.authToken);
       window.USER_ID = data.uid;
-      setStoredUid(window.USER_ID);
+      window.setStoredUid(window.USER_ID);
       authState.busy = false;
       goto("weeks");
       initPersistence();
@@ -856,9 +858,9 @@
 
   function logout() {
     window.authToken = null;
-    setAuthToken(null);
+    window.setAuthToken(null);
     window.USER_ID = null;
-    setStoredUid(null);
+    window.setStoredUid(null);
     state.view = "auth";
     render();
   }
