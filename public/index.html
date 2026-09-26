@@ -733,7 +733,18 @@
     if (factInterval) { clearInterval(factInterval); factInterval = null; }
   }
 
-  var authState = { mode: "login", error: null, busy: false };
+  var authState = { mode: "login", error: null, busy: false, info: null };
+  (function () {
+    try {
+      var params = new URLSearchParams(window.location.search);
+      var resetToken = params.get("reset");
+      if (resetToken) {
+        authState.mode = "reset";
+        authState.resetToken = resetToken;
+        window.authToken = null;
+      }
+    } catch (e) {}
+  })();
 
   function submitAuth(action) {
     var emailEl = document.getElementById("authEmail");
@@ -767,6 +778,71 @@
     });
   }
 
+  function submitForgotPassword() {
+    var emailEl = document.getElementById("authEmail");
+    var email = emailEl ? emailEl.value.trim() : "";
+    authState.error = null;
+    authState.info = null;
+    authState.busy = true;
+    render();
+    fetch("/api/auth/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: email })
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.message || "Er ging iets mis.");
+        return data;
+      });
+    }).then(function (data) {
+      authState.busy = false;
+      authState.info = data.message;
+      render();
+    }).catch(function (e) {
+      authState.busy = false;
+      authState.error = e.message;
+      render();
+    });
+  }
+
+  function submitResetPassword() {
+    var pwEl = document.getElementById("authPassword");
+    var pw2El = document.getElementById("authPassword2");
+    var password = pwEl ? pwEl.value : "";
+    var password2 = pw2El ? pw2El.value : "";
+    authState.error = null;
+    if (password !== password2) {
+      authState.error = "Wachtwoorden komen niet overeen.";
+      render();
+      return;
+    }
+    authState.busy = true;
+    render();
+    fetch("/api/auth/reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: authState.resetToken, newPassword: password })
+    }).then(function (res) {
+      return res.json().then(function (data) {
+        if (!res.ok) throw new Error(data.message || "Er ging iets mis.");
+        return data;
+      });
+    }).then(function (data) {
+      window.authToken = data.token;
+      window.setAuthToken(window.authToken);
+      window.USER_ID = data.uid;
+      window.setStoredUid(window.USER_ID);
+      authState.busy = false;
+      try { window.history.replaceState({}, "", window.location.pathname); } catch (e) {}
+      goto("weeks");
+      initPersistence();
+    }).catch(function (e) {
+      authState.busy = false;
+      authState.error = e.message;
+      render();
+    });
+  }
+
   function renderAuth() {
     var app = document.getElementById("app");
     app.innerHTML = "";
@@ -789,19 +865,27 @@
       '<path d="M346 190 a40 40 0 0 0 80 0 Z"/></svg>';
     main.appendChild(logoWrap);
 
+    var titles = { login: "Welkom terug", register: "Account aanmaken", forgot: "Wachtwoord vergeten", reset: "Nieuw wachtwoord instellen" };
+    var subtitles = {
+      login: "Log in om je gerechten en planning te zien.",
+      register: "Je gegevens worden bewaard onder dit account.",
+      forgot: "Vul je e-mailadres in, dan sturen we je een link.",
+      reset: "Kies een nieuw wachtwoord voor je account."
+    };
+
     var h1 = document.createElement("h1");
     h1.style.textAlign = "center";
     h1.style.fontFamily = "Fraunces, serif";
     h1.style.fontSize = "22px";
     h1.style.marginBottom = "4px";
-    h1.textContent = authState.mode === "login" ? "Welkom terug" : "Account aanmaken";
+    h1.textContent = titles[authState.mode] || "Balanza";
     main.appendChild(h1);
 
     var sub = document.createElement("div");
     sub.className = "muted";
     sub.style.textAlign = "center";
     sub.style.marginBottom = "24px";
-    sub.textContent = authState.mode === "login" ? "Log in om je gerechten en planning te zien." : "Je gegevens worden bewaard onder dit account.";
+    sub.textContent = subtitles[authState.mode] || "";
     main.appendChild(sub);
 
     if (authState.error) {
@@ -811,48 +895,120 @@
       err.textContent = authState.error;
       main.appendChild(err);
     }
+    if (authState.info) {
+      var info = document.createElement("div");
+      info.className = "tag balans";
+      info.style.marginBottom = "14px";
+      info.style.display = "block";
+      info.textContent = authState.info;
+      main.appendChild(info);
+    }
 
-    var emailInput = document.createElement("input");
-    emailInput.type = "email";
-    emailInput.id = "authEmail";
-    emailInput.placeholder = "E-mailadres";
-    emailInput.className = "textinput";
-    emailInput.style.marginBottom = "10px";
-    main.appendChild(emailInput);
+    if (authState.mode === "login" || authState.mode === "register") {
+      var emailInput = document.createElement("input");
+      emailInput.type = "email";
+      emailInput.id = "authEmail";
+      emailInput.placeholder = "E-mailadres";
+      emailInput.className = "textinput";
+      emailInput.style.marginBottom = "10px";
+      main.appendChild(emailInput);
 
-    var pwInput = document.createElement("input");
-    pwInput.type = "password";
-    pwInput.id = "authPassword";
-    pwInput.placeholder = "Wachtwoord (minstens 8 tekens)";
-    pwInput.className = "textinput";
-    pwInput.style.marginBottom = "18px";
-    main.appendChild(pwInput);
+      var pwInput = document.createElement("input");
+      pwInput.type = "password";
+      pwInput.id = "authPassword";
+      pwInput.placeholder = "Wachtwoord (minstens 8 tekens)";
+      pwInput.className = "textinput";
+      pwInput.style.marginBottom = "10px";
+      main.appendChild(pwInput);
 
-    var submitBtn = document.createElement("button");
-    submitBtn.className = "primary-btn";
-    submitBtn.disabled = authState.busy;
-    submitBtn.textContent = authState.busy ? "Even geduld…" : (authState.mode === "login" ? "Inloggen" : "Account aanmaken");
-    submitBtn.onclick = function () { submitAuth(authState.mode === "login" ? "login" : "register"); };
-    main.appendChild(submitBtn);
+      if (authState.mode === "login") {
+        var forgotLink = document.createElement("button");
+        forgotLink.className = "wizard-skip";
+        forgotLink.style.marginBottom = "8px";
+        forgotLink.textContent = "Wachtwoord vergeten?";
+        forgotLink.onclick = function () {
+          authState.mode = "forgot"; authState.error = null; authState.info = null; render();
+        };
+        main.appendChild(forgotLink);
+      }
 
-    var toggle = document.createElement("button");
-    toggle.className = "wizard-skip";
-    toggle.style.marginTop = "14px";
-    toggle.textContent = authState.mode === "login" ? "Nog geen account? Account aanmaken" : "Al een account? Inloggen";
-    toggle.onclick = function () {
-      authState.mode = authState.mode === "login" ? "register" : "login";
-      authState.error = null;
-      render();
-    };
-    main.appendChild(toggle);
+      var submitBtn = document.createElement("button");
+      submitBtn.className = "primary-btn";
+      submitBtn.style.marginTop = "8px";
+      submitBtn.disabled = authState.busy;
+      submitBtn.textContent = authState.busy ? "Even geduld…" : (authState.mode === "login" ? "Inloggen" : "Account aanmaken");
+      submitBtn.onclick = function () { submitAuth(authState.mode === "login" ? "login" : "register"); };
+      main.appendChild(submitBtn);
 
-    app.appendChild(main);
+      var toggle = document.createElement("button");
+      toggle.className = "wizard-skip";
+      toggle.style.marginTop = "14px";
+      toggle.textContent = authState.mode === "login" ? "Nog geen account? Account aanmaken" : "Al een account? Inloggen";
+      toggle.onclick = function () {
+        authState.mode = authState.mode === "login" ? "register" : "login";
+        authState.error = null; authState.info = null;
+        render();
+      };
+      main.appendChild(toggle);
 
-    var pwField = document.getElementById("authPassword");
-    if (pwField) {
-      pwField.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") submitAuth(authState.mode === "login" ? "login" : "register");
-      });
+      app.appendChild(main);
+      var pwField = document.getElementById("authPassword");
+      if (pwField) {
+        pwField.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") submitAuth(authState.mode === "login" ? "login" : "register");
+        });
+      }
+    } else if (authState.mode === "forgot") {
+      var fEmailInput = document.createElement("input");
+      fEmailInput.type = "email";
+      fEmailInput.id = "authEmail";
+      fEmailInput.placeholder = "E-mailadres";
+      fEmailInput.className = "textinput";
+      fEmailInput.style.marginBottom = "18px";
+      main.appendChild(fEmailInput);
+
+      var fSubmitBtn = document.createElement("button");
+      fSubmitBtn.className = "primary-btn";
+      fSubmitBtn.disabled = authState.busy;
+      fSubmitBtn.textContent = authState.busy ? "Even geduld…" : "Verstuur reset-link";
+      fSubmitBtn.onclick = submitForgotPassword;
+      main.appendChild(fSubmitBtn);
+
+      var backToLogin = document.createElement("button");
+      backToLogin.className = "wizard-skip";
+      backToLogin.style.marginTop = "14px";
+      backToLogin.textContent = "Terug naar inloggen";
+      backToLogin.onclick = function () {
+        authState.mode = "login"; authState.error = null; authState.info = null; render();
+      };
+      main.appendChild(backToLogin);
+
+      app.appendChild(main);
+    } else if (authState.mode === "reset") {
+      var rPwInput = document.createElement("input");
+      rPwInput.type = "password";
+      rPwInput.id = "authPassword";
+      rPwInput.placeholder = "Nieuw wachtwoord (minstens 8 tekens)";
+      rPwInput.className = "textinput";
+      rPwInput.style.marginBottom = "10px";
+      main.appendChild(rPwInput);
+
+      var rPwInput2 = document.createElement("input");
+      rPwInput2.type = "password";
+      rPwInput2.id = "authPassword2";
+      rPwInput2.placeholder = "Herhaal nieuw wachtwoord";
+      rPwInput2.className = "textinput";
+      rPwInput2.style.marginBottom = "18px";
+      main.appendChild(rPwInput2);
+
+      var rSubmitBtn = document.createElement("button");
+      rSubmitBtn.className = "primary-btn";
+      rSubmitBtn.disabled = authState.busy;
+      rSubmitBtn.textContent = authState.busy ? "Even geduld…" : "Wachtwoord instellen";
+      rSubmitBtn.onclick = submitResetPassword;
+      main.appendChild(rSubmitBtn);
+
+      app.appendChild(main);
     }
   }
 
