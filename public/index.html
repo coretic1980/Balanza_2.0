@@ -354,16 +354,15 @@
   function setStoredUid(u) {
     try { if (u) localStorage.setItem(AUTH_UID_KEY, u); else localStorage.removeItem(AUTH_UID_KEY); } catch (e) {}
   }
-  var authToken = getAuthToken();
-  var USER_ID = getStoredUid();
+  window.authToken = getAuthToken();
+  window.USER_ID = getStoredUid();
   function authHeaders() {
-    return authToken ? { "Authorization": "Bearer " + authToken } : {};
+    return window.authToken ? { "Authorization": "Bearer " + window.authToken } : {};
   }
   function handleAuthExpired() {
-    authToken = null;
+    window.authToken = null;
     setAuthToken(null);
-    state.view = "auth";
-    render();
+    if (window.render) window.render();
   }
 
   function parseErrorFromResponse(res) {
@@ -419,7 +418,7 @@
         });
       }
       if (name === "user") {
-        return Promise.resolve({ id: function () { return Promise.resolve(USER_ID); } });
+        return Promise.resolve({ id: function () { return Promise.resolve(window.USER_ID); } });
       }
       if (name === "downloads") {
         return Promise.resolve({
@@ -752,10 +751,10 @@
         return data;
       });
     }).then(function (data) {
-      authToken = data.token;
-      setAuthToken(authToken);
-      USER_ID = data.uid;
-      setStoredUid(USER_ID);
+      window.authToken = data.token;
+      setAuthToken(window.authToken);
+      window.USER_ID = data.uid;
+      setStoredUid(window.USER_ID);
       authState.busy = false;
       goto("weeks");
       initPersistence();
@@ -856,9 +855,9 @@
   }
 
   function logout() {
-    authToken = null;
+    window.authToken = null;
     setAuthToken(null);
-    USER_ID = null;
+    window.USER_ID = null;
     setStoredUid(null);
     state.view = "auth";
     render();
@@ -4118,7 +4117,7 @@
 
   function render() {
     try {
-      if (!authToken) return renderAuth();
+      if (!window.authToken) return renderAuth();
       if (state.view === "weeks") renderWeeks();
       else if (state.view === "library") renderLibrary();
       else if (state.view === "guide") renderGuide();
@@ -4144,7 +4143,8 @@
     }
   }
 
-  if (authToken) { initPersistence(); } else { render(); }
+  window.render = render;
+  if (window.authToken) { initPersistence(); } else { render(); }
 })();
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", function () {
