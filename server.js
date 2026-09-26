@@ -41,6 +41,8 @@ const MONGODB_URI = process.env.MONGODB_URI || "";
 const MONGODB_DB_NAME = process.env.MONGODB_DB || "weekmenu";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
+const RESEND_API_KEY = process.env.RESEND_API_KEY || "";
+const RESEND_FROM = process.env.RESEND_FROM || "Balanza <onboarding@resend.dev>";
 
 const DATA_DIR = path.join(__dirname, "data");
 const DATA_FILE = path.join(DATA_DIR, "store.json");
@@ -822,6 +824,84 @@ function handleAuthLogin(req, res) {
 }
 
 var ALLOWED_SUBPATHS = ["prefs", "dishes", "plannedWeeks"];
+var RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function sendResetEmail(email, resetLink) {
+  if (!RESEND_API_KEY) return Promise.reject(new Error("RESEND_API_KEY niet ingesteld."));
+  return fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Authorization": "Bearer " + RESEND_API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: RESEND_FROM,
+      to: [email],
+      subject: "Wachtwoord resetten — Balanza",
+      html: "<p>Je hebt een wachtwoordreset aangevraagd voor je Balanza-account.</p>" +
+        "<p><a href=\"" + resetLink + "\">Klik hier om een nieuw wachtwoord in te stellen</a></p>" +
+        "<p>Deze link is 1 uur geldig. Heb je dit niet zelf aangevraagd, dan kun je deze e-mail gewoon negeren.</p>"
+    })
+  }).then(function (res) {
+    if (!res.ok) {
+      return res.text().then(function (t) { throw new Error("Resend API error " + res.status + ": " + t.slice(0, 200)); });
+    }
+  });
+}
+
+function handleForgotPassword(req, res) {
+  readBody(req).then(function (body) {
+    var email = normalizeEmail(body && body.email);
+    // Always return the same generic message, whether or not the account
+    // exists — this prevents anyone from using this endpoint to check which
+    // e-mail addresses have an account.
+    function genericResponse() {
+      sendJSON(res, 200, { message: "Als dit e-mailadres bekend is, ontvang je een link om je wachtwoord te resetten." });
+    }
+    if (!email) return genericResponse();
+    dbGetDoc("auth/users/" + email).then(function (result) {
+      if (!result.exists) return genericResponse();
+      var token = crypto.randomBytes(24).toString("hex");
+      return dbSetDoc("auth/resets/" + token, { email: email, expiresAt: Date.now() + RESET_TOKEN_TTL_MS, used: false }).then(function () {
+        var host = req.headers.host;
+        var resetLink = "https://" + host + "/?reset=" + token;
+        return sendResetEmail(email, resetLink);
+      }).then(genericResponse).catch(function () {
+        // Don't leak email-sending failures to the client either.
+        genericResponse();
+      });
+    }).catch(genericResponse);
+  }).catch(function () {
+    sendJSON(res, 400, { code: "bad_request", message: "Ongeldige aanvraag." });
+  });
+}
+
+function handleResetPassword(req, res) {
+  readBody(req).then(function (body) {
+    var token = body && body.token;
+    var newPassword = (body && body.newPassword) || "";
+    if (!token) return sendJSON(res, 400, { code: "bad_request", message: "Ongeldige of verlopen link." });
+    if (newPassword.length < 8) return sendJSON(res, 400, { code: "bad_request", message: "Wachtwoord moet minstens 8 tekens zijn." });
+    dbGetDoc("auth/resets/" + token).then(function (result) {
+      if (!result.exists || result.value.used || Date.now() > result.value.expiresAt) {
+        return sendJSON(res, 400, { code: "bad_request", message: "Deze link is ongeldig of verlopen. Vraag een nieuwe aan." });
+      }
+      var email = result.value.email;
+      return dbGetDoc("auth/users/" + email).then(function (userResult) {
+        if (!userResult.exists) return sendJSON(res, 400, { code: "bad_request", message: "Account niet gevonden." });
+        var uid = userResult.value.uid;
+        var record = makePasswordRecord(newPassword);
+        return Promise.all([
+          dbSetDoc("auth/users/" + email, { uid: uid, salt: record.salt, hash: record.hash, createdAt: userResult.value.createdAt }),
+          dbSetDoc("auth/resets/" + token, { email: email, expiresAt: 0, used: true })
+        ]).then(function () {
+          sendJSON(res, 200, { token: issueUserSession(uid, email), uid: uid });
+        });
+      });
+    }).catch(function (err) {
+      sendJSON(res, 500, { code: "error", message: "Resetten mislukt: " + (err && err.message ? err.message : "onbekende fout") });
+    });
+  }).catch(function () {
+    sendJSON(res, 400, { code: "bad_request", message: "Ongeldige aanvraag." });
+  });
+}
 
 function handleDbGet(req, res, query) {
   var payload = requireUser(req, res);
@@ -1037,6 +1117,8 @@ var server = http.createServer(function (req, res) {
   if (req.method === "POST" && url.pathname === "/api/generate") return handleGenerate(req, res);
   if (req.method === "POST" && url.pathname === "/api/auth/register") return handleAuthRegister(req, res);
   if (req.method === "POST" && url.pathname === "/api/auth/login") return handleAuthLogin(req, res);
+  if (req.method === "POST" && url.pathname === "/api/auth/forgot-password") return handleForgotPassword(req, res);
+  if (req.method === "POST" && url.pathname === "/api/auth/reset-password") return handleResetPassword(req, res);
   if (req.method === "GET" && url.pathname === "/api/db") return handleDbGet(req, res, url.searchParams);
   if (req.method === "POST" && url.pathname === "/api/db") return handleDbSet(req, res);
   if (req.method === "GET" && url.pathname === "/api/image") return handleImage(req, res, url.searchParams);
